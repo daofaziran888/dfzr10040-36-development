@@ -9,8 +9,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.recovery import checkpoint_manager
 from app.routers import ROUTERS
 from app.store import store
+
+# 续办证据清单默认落盘，进程重启后仍可凭尝试编号回查真实写入结果。
+checkpoint_manager.evidence_dir = settings.evidence_dir
 
 app = FastAPI(title="熔炉工坊 · 实时数据融合与宽表构建平台", version="1.0.0")
 

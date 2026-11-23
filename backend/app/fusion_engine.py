@@ -29,6 +29,11 @@ from app.models import (
     WatermarkRecord,
     WideTableDef,
 )
+from app.recovery import (
+    BackfillEvidenceLedger,
+    PartitionRow,
+    checkpoint_manager,
+)
 
 
 def _now_iso() -> str:
@@ -476,6 +481,8 @@ class FusionEngine:
         """执行带断点续传的数据回填。
 
         从 checkpoint_position 处继续处理，失败时保留断点可恢复。
+        断点只是提示；``records`` 的逐行写入结果同时登记到续办证据清单，
+        恢复时可以按行身份回查哪些行真实写入、哪些仍需补。
         """
         task = self._backfills.get(backfill_id)
         if task is None:
@@ -503,6 +510,8 @@ class FusionEngine:
             task.checkpoint_position = ""
             complete = True
 
+        attempt_no = self._record_backfill_evidence(task, source_records, start_idx, end_idx)
+
         return {
             "ok": True,
             "batch_processed": processed,
@@ -510,7 +519,46 @@ class FusionEngine:
             "remaining": task.remaining_rows,
             "checkpoint": task.checkpoint_position,
             "complete": complete,
+            "attempt_no": attempt_no,
         }
+
+    def backfill_evidence_checklist(self, task_code: str) -> dict[str, Any] | None:
+        """按任务编号回查回填续办证据清单。"""
+        return checkpoint_manager.evidence_checklist(task_code)
+
+    def _record_backfill_evidence(self, task: BackfillTask,
+                                  source_records: list[dict[str, Any]],
+                                  start_idx: int, end_idx: int) -> int:
+        """把本批处理写成一次尝试证据，并按真实写入登记行状态。"""
+        ledger = checkpoint_manager.get_ledger(task.task_code)
+        if ledger is None:
+            rows = [
+                PartitionRow(
+                    row_id=self._backfill_row_id(record, idx),
+                    payload=dict(record),
+                )
+                for idx, record in enumerate(source_records)
+            ]
+            ledger = BackfillEvidenceLedger(
+                task.task_code, task.backfill_range or task.target_wide_table, rows)
+            checkpoint_manager.register_ledger(ledger)
+
+        attempt_no = ledger.next_attempt_no
+        scope = [self._backfill_row_id(rec, idx)
+                 for idx, rec in enumerate(source_records[start_idx:end_idx],
+                                           start=start_idx)]
+        ledger.record_attempt(attempt_no, scope, "批次已提交", note="断点回填批次")
+        ledger.resolve_attempt(attempt_no, scope, note="批次返回成功", status="已完成")
+        checkpoint_manager.persist_ledger(task.task_code)
+        return attempt_no
+
+    @staticmethod
+    def _backfill_row_id(record: dict[str, Any], index: int) -> str:
+        for field in ("id", "order_id", "_fusion_key"):
+            value = record.get(field)
+            if value not in (None, ""):
+                return str(value)
+        return f"row-{index}"
 
     def migrate_to_cold_store(self, strategy_id: int,
                               hot_partition_cutoff: str) -> dict[str, Any]:

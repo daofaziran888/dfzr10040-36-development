@@ -37,6 +37,86 @@ export async function runAction(
   return await response.json()
 }
 
+export type EvidenceRow = {
+  row_id: string
+  partition: string
+  status: string
+  written_at: string
+  write_source: string
+}
+
+export type EvidenceAttempt = {
+  attempt_no: number
+  status: string
+  scope: string[]
+  failure_reason: string
+  failed_at: string
+  written_rows: string[]
+  affected_rows: string[]
+  resolved_at: string
+}
+
+export type EvidenceReceipt = {
+  receipt: string
+  attempt_no: number | null
+  rows: string[]
+  status: string
+  adopted_rows: string[]
+  duplicate_rows: string[]
+  received_at: string
+}
+
+export type EvidenceChecklist = {
+  task_code: string
+  partition: string
+  total: number
+  written_count: number
+  pending_count: number
+  written_rows: string[]
+  pending_rows: string[]
+  rows: EvidenceRow[]
+  source_failure: {
+    attempt_no?: number
+    failure_reason?: string
+    failed_at?: string
+    scope?: string[]
+  }
+  open_attempt: number | null
+  attempts: EvidenceAttempt[]
+  receipts: EvidenceReceipt[]
+  conflicts: Record<string, unknown>[]
+  next_claim: string[]
+}
+
+export async function loadEvidence(taskCode: string): Promise<EvidenceChecklist> {
+  const response = await request(`/api/recovery/${encodeURIComponent(taskCode)}/evidence`)
+  if (!response.ok) throw new Error('续办证据清单读取失败')
+  return await response.json()
+}
+
+export async function issueClaim(
+  taskCode: string,
+  entryId: number,
+): Promise<Record<string, unknown>> {
+  const response = await request(`/api/recovery/${encodeURIComponent(taskCode)}/claims`, {
+    method: 'POST',
+    body: JSON.stringify({ entry_id: entryId }),
+  })
+  return await response.json()
+}
+
+export async function writeClaim(
+  taskCode: string,
+  claim: string,
+  writtenRows: string[],
+): Promise<Record<string, unknown>> {
+  const response = await request(
+    `/api/recovery/${encodeURIComponent(taskCode)}/claims/write`,
+    { method: 'POST', body: JSON.stringify({ claim, written_rows: writtenRows }) },
+  )
+  return await response.json()
+}
+
 export async function downloadEntries(
   key: string,
   filters: Record<string, string> = {},
